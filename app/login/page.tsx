@@ -12,13 +12,16 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     setLoading(true);
     setMessage("");
+    setResetMessage("");
 
     const { error } = await supabase.auth.signInWithPassword({
       email,
@@ -33,6 +36,37 @@ export default function LoginPage() {
 
     router.push("/dashboard");
     router.refresh();
+  }
+
+  async function handleForgotPassword() {
+    setResetMessage("");
+    setMessage("");
+
+    if (!email.trim()) {
+      setResetMessage("Please enter your email address first.");
+      return;
+    }
+
+    setResetLoading(true);
+
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      email.trim(),
+      {
+        redirectTo: `${window.location.origin}/reset-password`,
+      }
+    );
+
+    if (error) {
+      setResetMessage(error.message);
+      setResetLoading(false);
+      return;
+    }
+
+    setResetMessage(
+      "Password reset link has been sent to your email."
+    );
+
+    setResetLoading(false);
   }
 
   return (
@@ -173,13 +207,10 @@ export default function LoginPage() {
 
             <div className="relative overflow-hidden rounded-3xl border border-white/[0.08] bg-white/[0.035] p-7 shadow-2xl shadow-black/40 backdrop-blur-2xl sm:p-9">
               
-              {/* Card glow */}
               <div className="pointer-events-none absolute right-[-100px] top-[-100px] h-[220px] w-[220px] rounded-full bg-purple-500/[0.10] blur-[70px]" />
 
               <div className="relative">
-                {/* =========================
-                    HEADER
-                ========================== */}
+                {/* HEADER */}
 
                 <div className="mb-8">
                   <div className="mb-3 text-[10px] font-medium uppercase tracking-[0.22em] text-purple-300/70">
@@ -196,9 +227,7 @@ export default function LoginPage() {
                   </p>
                 </div>
 
-                {/* =========================
-                    FORM
-                ========================== */}
+                {/* FORM */}
 
                 <form
                   onSubmit={handleLogin}
@@ -232,9 +261,22 @@ export default function LoginPage() {
                   {/* PASSWORD */}
 
                   <div>
-                    <label className="mb-2 block text-xs font-medium text-white/55">
-                      Password
-                    </label>
+                    <div className="mb-2 flex items-center justify-between">
+                      <label className="block text-xs font-medium text-white/55">
+                        Password
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={handleForgotPassword}
+                        disabled={resetLoading}
+                        className="text-xs font-medium text-purple-300 transition hover:text-purple-200 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {resetLoading
+                          ? "Sending..."
+                          : "Forgot password?"}
+                      </button>
+                    </div>
 
                     <div className="group flex h-12 items-center rounded-xl border border-white/[0.08] bg-black/20 transition focus-within:border-purple-400/40 focus-within:bg-purple-500/[0.025] focus-within:ring-4 focus-within:ring-purple-500/[0.06]">
                       <div className="flex w-11 items-center justify-center text-xs text-purple-300/70">
@@ -253,6 +295,14 @@ export default function LoginPage() {
                       />
                     </div>
                   </div>
+
+                  {/* RESET MESSAGE */}
+
+                  {resetMessage && (
+                    <div className="rounded-xl border border-purple-400/15 bg-purple-500/[0.08] px-4 py-3 text-sm leading-6 text-purple-200">
+                      {resetMessage}
+                    </div>
+                  )}
 
                   {/* ERROR */}
 
@@ -285,9 +335,7 @@ export default function LoginPage() {
                   </button>
                 </form>
 
-                {/* =========================
-                    DIVIDER
-                ========================== */}
+                {/* DIVIDER */}
 
                 <div className="my-7 flex items-center gap-3">
                   <div className="h-px flex-1 bg-white/[0.07]" />
@@ -299,9 +347,7 @@ export default function LoginPage() {
                   <div className="h-px flex-1 bg-white/[0.07]" />
                 </div>
 
-                {/* =========================
-                    REGISTER
-                ========================== */}
+                {/* REGISTER */}
 
                 <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 text-center">
                   <p className="text-xs text-white/35">
@@ -332,9 +378,7 @@ export default function LoginPage() {
         </div>
       </section>
 
-      {/* =========================
-          FOOTER
-      ========================== */}
+      {/* FOOTER */}
 
       <div className="pointer-events-none fixed bottom-5 left-0 right-0 z-10 text-center">
         <span className="text-[9px] uppercase tracking-[0.22em] text-white/15">
