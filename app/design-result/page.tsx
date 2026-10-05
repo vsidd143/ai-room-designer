@@ -30,10 +30,29 @@ type RoomAnalysis = {
 type BudgetBreakdown = {
   category?: string;
   item?: string;
-  amount?: number;
-  estimated?: number;
-  cost?: number;
-  percentage?: number;
+  estimate?: unknown;
+  estimated?: unknown;
+  amount?: unknown;
+  cost?: unknown;
+  estimatedCost?: unknown;
+  value?: unknown;
+  percentage?: number | string;
+  [key: string]: unknown;
+};
+
+type BudgetSummary = {
+  totalBudget?: number | string;
+  estimatedTotal?: number | string;
+  remainingBudget?: number | string;
+  budgetUsedPercentage?: number | string;
+};
+
+type ChangeItem = {
+  category?: string;
+  before?: string;
+  after?: string;
+  improvement?: string;
+  [key: string]: unknown;
 };
 
 type FinalAnalysis = {
@@ -51,13 +70,13 @@ type FinalAnalysis = {
     storage?: string;
   };
 
-  oldToNewChanges?: string[];
+  oldToNewChanges?: Array<string | ChangeItem>;
 
-  improvements?: string[];
+  improvements?: Array<string | ChangeItem>;
 
   budgetBreakdown?: BudgetBreakdown[];
 
-  budgetSummary?: string;
+  budgetSummary?: string | BudgetSummary;
 
   finalRecommendation?: string;
 
@@ -120,6 +139,10 @@ function formatBudget(value: unknown): string {
       objectValue.value,
       objectValue.budget,
       objectValue.total,
+      objectValue.estimate,
+      objectValue.estimated,
+      objectValue.cost,
+      objectValue.estimatedCost,
     ];
 
     for (const possibleValue of possibleValues) {
@@ -223,6 +246,12 @@ export default function DesignResultPage() {
   const [analyzing, setAnalyzing] =
     useState(false);
 
+  const [saving, setSaving] =
+    useState(false);
+
+  const [saved, setSaved] =
+    useState(false);
+
   const [generationStep, setGenerationStep] =
     useState("");
 
@@ -276,12 +305,21 @@ export default function DesignResultPage() {
         "smartroom_final_analysis"
       );
 
+    const savedDesign =
+      localStorage.getItem(
+        "smartroom_design_saved"
+      );
+
     setRoomImage(savedImage);
     setRoomMime(savedMime);
     setRoomType(savedRoom);
     setBudget(savedBudget);
     setStyle(savedStyle);
     setGeneratedImage(savedGenerated);
+
+    if (savedDesign === "true") {
+      setSaved(true);
+    }
 
     if (savedAnalysis) {
       try {
@@ -336,12 +374,6 @@ export default function DesignResultPage() {
     return formatBudget(budget);
   }, [budget]);
 
-  /*
-   * Analyze the already generated room.
-   *
-   * This function does NOT generate a new image.
-   * It only calls /api/final-analysis.
-   */
   const analyzeGeneratedRoom = async (
     newImage?: string
   ) => {
@@ -443,10 +475,6 @@ export default function DesignResultPage() {
     }
   };
 
-  /*
-   * Kept for compatibility with the existing
-   * generation flow.
-   */
   const generateFinalAnalysis = async (
     newImage: string
   ) => {
@@ -498,6 +526,7 @@ export default function DesignResultPage() {
       setError("");
       setAnalysisError("");
       setFinalAnalysis(null);
+      setSaved(false);
 
       localStorage.removeItem(
         "smartroom_generated_image"
@@ -505,6 +534,10 @@ export default function DesignResultPage() {
 
       localStorage.removeItem(
         "smartroom_final_analysis"
+      );
+
+      localStorage.removeItem(
+        "smartroom_design_saved"
       );
 
       setGenerationStep(
@@ -564,12 +597,6 @@ export default function DesignResultPage() {
         "Your new interior has been generated."
       );
 
-      /*
-       * Automatically attempt the final analysis.
-       *
-       * If this fails, the generated image remains
-       * available and the user gets a retry button.
-       */
       const report =
         await generateFinalAnalysis(
           newImage
@@ -618,6 +645,196 @@ export default function DesignResultPage() {
     document.body.removeChild(link);
   };
 
+  /*
+   * SAVE DESIGN
+   *
+   * This is different from Download.
+   *
+   * Download:
+   *   Saves only the generated image to the device.
+   *
+   * Save Design:
+   *   Saves original image + generated image
+   *   + room analysis + final analysis
+   *   + budget + style to Supabase.
+   */
+  const handleSaveDesign = async () => {
+    if (!roomImage) {
+      setError(
+        "Original room image is missing. Cannot save this design."
+      );
+      return;
+    }
+
+    if (!generatedImageSource) {
+      setError(
+        "Generated room image is missing. Please generate the design first."
+      );
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+      setAnalysisError("");
+
+      /*
+       * STEP 1
+       * Save both images into the private
+       * Supabase Storage bucket.
+       */
+      const imageResponse = await fetch(
+        "/api/save-design-images",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            originalImage:
+              originalImageSource,
+            generatedImage:
+              generatedImageSource,
+            originalMimeType:
+              roomMime || "image/jpeg",
+            generatedMimeType:
+              "image/png",
+          }),
+        }
+      );
+
+      const imageData =
+        await imageResponse.json();
+
+      if (!imageResponse.ok) {
+        throw new Error(
+          imageData?.error ||
+            "Could not save the design images."
+        );
+      }
+
+      /*
+       * Support the possible response names
+       * returned by the image-save API.
+       */
+      const originalImagePath =
+        imageData.originalPath ??
+        imageData.originalImagePath ??
+        imageData.original_image_path ??
+        imageData.originalImageUrl ??
+        imageData.original_image_url;
+
+      const generatedImagePath =
+        imageData.generatedPath ??
+        imageData.generatedImagePath ??
+        imageData.generated_image_path ??
+        imageData.generatedImageUrl ??
+        imageData.generated_image_url;
+
+      if (
+        !originalImagePath ||
+        !generatedImagePath
+      ) {
+        console.error(
+          "SAVE IMAGE RESPONSE:",
+          imageData
+        );
+
+        throw new Error(
+          "Images were uploaded, but their saved paths were not returned."
+        );
+      }
+
+      /*
+       * STEP 2
+       * Save the complete design record
+       * into public.designs.
+       */
+      const designResponse =
+        await fetch(
+          "/api/save-design",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              originalImageUrl:
+                originalImagePath,
+              generatedImageUrl:
+                generatedImagePath,
+
+              /*
+               * Also send snake_case names so
+               * the backend can use either format.
+               */
+              original_image_url:
+                originalImagePath,
+              generated_image_url:
+                generatedImagePath,
+
+              roomAnalysis:
+                roomAnalysis,
+
+              finalAnalysis:
+                finalAnalysis,
+
+              budget,
+
+              style,
+
+              roomType,
+            }),
+          }
+        );
+
+      const designData =
+        await designResponse.json();
+
+      if (!designResponse.ok) {
+        console.error(
+          "SAVE DESIGN RESPONSE:",
+          designData
+        );
+
+        throw new Error(
+          designData?.error ||
+            "Could not save the design."
+        );
+      }
+
+      /*
+       * Save local state so refresh does not
+       * immediately show "Save Design" again.
+       */
+      setSaved(true);
+
+      localStorage.setItem(
+        "smartroom_design_saved",
+        "true"
+      );
+
+      setGenerationStep(
+        "Your design has been saved successfully."
+      );
+    } catch (error) {
+      console.error(
+        "SAVE DESIGN ERROR:",
+        error
+      );
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while saving your design."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleStartAgain = () => {
     localStorage.removeItem(
       "smartroom_room_image"
@@ -643,11 +860,15 @@ export default function DesignResultPage() {
       "smartroom_uploaded_path"
     );
 
+    localStorage.removeItem(
+      "smartroom_design_saved"
+    );
+
     router.push("/planner");
   };
 
   const renderList = (
-    items?: string[]
+    items?: Array<string | ChangeItem>
   ) => {
     if (!items || items.length === 0) {
       return (
@@ -660,18 +881,73 @@ export default function DesignResultPage() {
     return (
       <div className="space-y-3">
         {items.map(
-          (item, index) => (
-            <div
-              key={`${item}-${index}`}
-              className="flex gap-3"
-            >
-              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-purple-400" />
+          (item, index) => {
+            if (
+              typeof item === "string"
+            ) {
+              return (
+                <div
+                  key={`${item}-${index}`}
+                  className="flex gap-3"
+                >
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-purple-400" />
 
-              <p className="text-sm leading-6 text-slate-300">
-                {item}
-              </p>
-            </div>
-          )
+                  <p className="text-sm leading-6 text-slate-300">
+                    {item}
+                  </p>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={`change-${index}`}
+                className="rounded-2xl border border-white/10 bg-white/[0.025] p-5"
+              >
+                {item.category && (
+                  <p className="text-xs font-semibold text-purple-200">
+                    {item.category}
+                  </p>
+                )}
+
+                {item.before && (
+                  <div className="mt-3">
+                    <p className="text-[9px] font-semibold tracking-[0.18em] text-slate-600">
+                      BEFORE
+                    </p>
+
+                    <p className="mt-1 text-sm leading-6 text-slate-400">
+                      {item.before}
+                    </p>
+                  </div>
+                )}
+
+                {item.after && (
+                  <div className="mt-3">
+                    <p className="text-[9px] font-semibold tracking-[0.18em] text-purple-300/70">
+                      AFTER
+                    </p>
+
+                    <p className="mt-1 text-sm leading-6 text-slate-300">
+                      {item.after}
+                    </p>
+                  </div>
+                )}
+
+                {item.improvement && (
+                  <div className="mt-3">
+                    <p className="text-[9px] font-semibold tracking-[0.18em] text-emerald-300/70">
+                      IMPROVEMENT
+                    </p>
+
+                    <p className="mt-1 text-sm leading-6 text-slate-300">
+                      {item.improvement}
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          }
         )}
       </div>
     );
@@ -679,22 +955,65 @@ export default function DesignResultPage() {
 
   const getBreakdownAmount = (
     item: BudgetBreakdown
-  ) => {
-    const amount =
-      item.amount ??
-      item.estimated ??
-      item.cost;
+  ): string => {
+    const possibleAmounts = [
+      item.estimate,
+      item.estimated,
+      item.amount,
+      item.cost,
+      item.estimatedCost,
+      item.value,
+    ];
 
-    if (
-      typeof amount !== "number" ||
-      !Number.isFinite(amount)
-    ) {
-      return "—";
+    for (const amount of possibleAmounts) {
+      if (
+        amount !== undefined &&
+        amount !== null &&
+        amount !== ""
+      ) {
+        const formatted =
+          formatBudget(amount);
+
+        if (
+          formatted !== "Not selected"
+        ) {
+          return formatted;
+        }
+      }
     }
 
-    return `₹${amount.toLocaleString(
-      "en-IN"
-    )}`;
+    const itemObject =
+      item as Record<string, unknown>;
+
+    const nestedAmountKeys = [
+      "price",
+      "total",
+      "estimatedAmount",
+      "estimatedPrice",
+      "budget",
+    ];
+
+    for (const key of nestedAmountKeys) {
+      const nestedValue =
+        itemObject[key];
+
+      if (
+        nestedValue !== undefined &&
+        nestedValue !== null &&
+        nestedValue !== ""
+      ) {
+        const formatted =
+          formatBudget(nestedValue);
+
+        if (
+          formatted !== "Not selected"
+        ) {
+          return formatted;
+        }
+      }
+    }
+
+    return "—";
   };
 
   return (
@@ -730,8 +1049,7 @@ export default function DesignResultPage() {
           href="/dashboard"
           className="group flex items-center gap-3"
         >
-          <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-[0_0_30px_rgba(139,92,246,0.12)] transition duration-500 group-hover:scale-105"
-          >
+          <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-[0_0_30px_rgba(139,92,246,0.12)] transition duration-500 group-hover:scale-105">
             <div className="absolute inset-0 bg-gradient-to-br from-purple-500/20 to-transparent" />
 
             <span className="relative text-lg font-black">
@@ -1006,7 +1324,9 @@ export default function DesignResultPage() {
                   onClick={() =>
                     analyzeGeneratedRoom()
                   }
-                  disabled={analyzing || generating}
+                  disabled={
+                    analyzing || generating
+                  }
                   className="mt-4 inline-flex items-center gap-3 rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {analyzing
@@ -1042,7 +1362,7 @@ export default function DesignResultPage() {
               : "ROOMAI will redesign your actual room while considering the selected room type, budget and interior style."}
           </p>
 
-          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row sm:flex-wrap">
             {!generatedImage ? (
               <button
                 type="button"
@@ -1070,7 +1390,8 @@ export default function DesignResultPage() {
                     }
                     disabled={
                       analyzing ||
-                      generating
+                      generating ||
+                      saving
                     }
                     className="inline-flex items-center gap-3 rounded-full bg-purple-400 px-7 py-3.5 text-sm font-semibold text-black transition hover:scale-[1.02] hover:bg-purple-300 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1088,7 +1409,8 @@ export default function DesignResultPage() {
                     }
                     disabled={
                       analyzing ||
-                      generating
+                      generating ||
+                      saving
                     }
                     className="inline-flex items-center gap-3 rounded-full border border-purple-400/20 bg-purple-500/10 px-7 py-3.5 text-sm font-medium text-purple-200 transition hover:bg-purple-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -1101,18 +1423,52 @@ export default function DesignResultPage() {
                 <button
                   type="button"
                   onClick={generateDesign}
-                  disabled={generating}
+                  disabled={
+                    generating ||
+                    analyzing ||
+                    saving
+                  }
                   className="inline-flex items-center gap-3 rounded-full bg-white px-7 py-3.5 text-sm font-semibold text-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   ✦ Generate Again
                 </button>
 
+                {/* SAVE DESIGN */}
+
+                <button
+                  type="button"
+                  onClick={handleSaveDesign}
+                  disabled={
+                    saving ||
+                    generating ||
+                    analyzing ||
+                    saved
+                  }
+                  className={`inline-flex items-center gap-3 rounded-full px-7 py-3.5 text-sm font-semibold transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-60 ${
+                    saved
+                      ? "border border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+                      : "bg-purple-400 text-black hover:bg-purple-300"
+                  }`}
+                >
+                  {saving
+                    ? "Saving..."
+                    : saved
+                    ? "✓ Saved"
+                    : "♡ Save Design"}
+                </button>
+
+                {/* DOWNLOAD */}
+
                 <button
                   type="button"
                   onClick={handleDownload}
-                  className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-7 py-3.5 text-sm font-medium text-slate-200 transition hover:bg-white/[0.08]"
+                  disabled={
+                    saving ||
+                    generating
+                  }
+                  className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-7 py-3.5 text-sm font-medium text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  ↓ Download
+                  ↓ Download Image
                 </button>
               </>
             )}
@@ -1121,13 +1477,28 @@ export default function DesignResultPage() {
               type="button"
               onClick={handleStartAgain}
               disabled={
-                generating || analyzing
+                generating ||
+                analyzing ||
+                saving
               }
               className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-transparent px-7 py-3.5 text-sm text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:opacity-50"
             >
               Start New Design
             </button>
           </div>
+
+          {saved && (
+            <p className="mt-5 text-xs text-emerald-300/80">
+              Design saved successfully. You can find it in
+              <Link
+                href="/my-designs"
+                className="ml-1 underline underline-offset-4 hover:text-emerald-200"
+              >
+                My Designs
+              </Link>
+              .
+            </p>
+          )}
         </div>
       </section>
 
@@ -1391,24 +1762,6 @@ export default function DesignResultPage() {
                 </div>
               )}
 
-            {/* Improvements */}
-
-            {finalAnalysis.improvements &&
-              finalAnalysis.improvements
-                .length > 0 && (
-                <div className="mt-10">
-                  <ReportTitle>
-                    Improvements
-                  </ReportTitle>
-
-                  <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.025] p-6">
-                    {renderList(
-                      finalAnalysis.improvements
-                    )}
-                  </div>
-                </div>
-              )}
-
             {/* Budget */}
 
             {(finalAnalysis.budgetBreakdown ||
@@ -1420,11 +1773,60 @@ export default function DesignResultPage() {
 
                 {finalAnalysis.budgetSummary && (
                   <div className="mt-5 rounded-2xl border border-purple-400/10 bg-purple-500/[0.04] p-6">
-                    <p className="text-sm leading-7 text-slate-300">
-                      {
-                        finalAnalysis.budgetSummary
-                      }
-                    </p>
+                    {typeof finalAnalysis.budgetSummary ===
+                    "string" ? (
+                      <p className="text-sm leading-7 text-slate-300">
+                        {
+                          finalAnalysis.budgetSummary
+                        }
+                      </p>
+                    ) : (
+                      <div className="space-y-2 text-sm leading-7 text-slate-300">
+                        <p>
+                          <span className="font-medium text-slate-200">
+                            Total Budget:
+                          </span>{" "}
+                          {formatBudget(
+                            finalAnalysis
+                              .budgetSummary
+                              .totalBudget
+                          )}
+                        </p>
+
+                        <p>
+                          <span className="font-medium text-slate-200">
+                            Estimated Total:
+                          </span>{" "}
+                          {formatBudget(
+                            finalAnalysis
+                              .budgetSummary
+                              .estimatedTotal
+                          )}
+                        </p>
+
+                        <p>
+                          <span className="font-medium text-slate-200">
+                            Remaining Budget:
+                          </span>{" "}
+                          {formatBudget(
+                            finalAnalysis
+                              .budgetSummary
+                              .remainingBudget
+                          )}
+                        </p>
+
+                        <p>
+                          <span className="font-medium text-slate-200">
+                            Budget Used:
+                          </span>{" "}
+                          {finalAnalysis
+                            .budgetSummary
+                            .budgetUsedPercentage ??
+                            "—"}
+                          %
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
 
