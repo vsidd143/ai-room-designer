@@ -88,13 +88,6 @@ function formatBudget(value: unknown): string {
       return "Not selected";
     }
 
-    /*
-     * Already formatted values such as:
-     * ₹50,000
-     * ₹1,00,000
-     * ₹2L
-     * ₹5L
-     */
     if (
       cleaned.includes("₹") ||
       cleaned.includes("K") ||
@@ -105,9 +98,6 @@ function formatBudget(value: unknown): string {
       return cleaned;
     }
 
-    /*
-     * Plain numeric string.
-     */
     const numericValue = Number(
       cleaned.replace(/,/g, "")
     );
@@ -154,18 +144,10 @@ function getImageSource(
     return "";
   }
 
-  /*
-   * If the image is already a complete data URL,
-   * use it directly.
-   */
   if (image.startsWith("data:")) {
     return image;
   }
 
-  /*
-   * Uploaded room images are stored in localStorage
-   * as raw Base64, so we must add the MIME prefix.
-   */
   return `data:${mimeType || "image/jpeg"};base64,${image}`;
 }
 
@@ -181,7 +163,10 @@ function getGeneratedImage(
   ];
 
   for (const value of possibleImageValues) {
-    if (typeof value === "string" && value.trim()) {
+    if (
+      typeof value === "string" &&
+      value.trim()
+    ) {
       return value;
     }
   }
@@ -235,7 +220,13 @@ export default function DesignResultPage() {
   const [generating, setGenerating] =
     useState(false);
 
+  const [analyzing, setAnalyzing] =
+    useState(false);
+
   const [generationStep, setGenerationStep] =
+    useState("");
+
+  const [analysisError, setAnalysisError] =
     useState("");
 
   const [error, setError] = useState("");
@@ -331,18 +322,9 @@ export default function DesignResultPage() {
       return generatedImage;
     }
 
-    /*
-     * Generated image responses are normally
-     * returned as a complete data URL.
-     * This fallback supports raw Base64 too.
-     */
     if (
-      generatedImage.startsWith(
-        "http://"
-      ) ||
-      generatedImage.startsWith(
-        "https://"
-      )
+      generatedImage.startsWith("http://") ||
+      generatedImage.startsWith("https://")
     ) {
       return generatedImage;
     }
@@ -354,12 +336,41 @@ export default function DesignResultPage() {
     return formatBudget(budget);
   }, [budget]);
 
-  const generateFinalAnalysis = async (
-    newImage: string
+  /*
+   * Analyze the already generated room.
+   *
+   * This function does NOT generate a new image.
+   * It only calls /api/final-analysis.
+   */
+  const analyzeGeneratedRoom = async (
+    newImage?: string
   ) => {
+    const imageToAnalyze =
+      newImage || generatedImage;
+
+    if (!imageToAnalyze) {
+      setAnalysisError(
+        "Generated room image is missing. Please generate the interior first."
+      );
+
+      return null;
+    }
+
+    if (!roomImage) {
+      setAnalysisError(
+        "Original room image is missing."
+      );
+
+      return null;
+    }
+
     try {
+      setAnalyzing(true);
+      setAnalysisError("");
+      setError("");
+
       setGenerationStep(
-        "Preparing your final AI analysis..."
+        "AI is analyzing your redesigned room..."
       );
 
       const response = await fetch(
@@ -372,7 +383,7 @@ export default function DesignResultPage() {
           },
           body: JSON.stringify({
             originalImage: roomImage,
-            generatedImage: newImage,
+            generatedImage: imageToAnalyze,
             originalAnalysis:
               roomAnalysis,
             roomType,
@@ -394,14 +405,22 @@ export default function DesignResultPage() {
       const report =
         getFinalReport(data);
 
-      if (report) {
-        setFinalAnalysis(report);
-
-        localStorage.setItem(
-          "smartroom_final_analysis",
-          JSON.stringify(report)
+      if (!report) {
+        throw new Error(
+          "AI completed the analysis but did not return a valid report."
         );
       }
+
+      setFinalAnalysis(report);
+
+      localStorage.setItem(
+        "smartroom_final_analysis",
+        JSON.stringify(report)
+      );
+
+      setGenerationStep(
+        "Design and final analysis completed."
+      );
 
       return report;
     } catch (error) {
@@ -410,12 +429,39 @@ export default function DesignResultPage() {
         error
       );
 
-      throw new Error(
+      const message =
         error instanceof Error
           ? error.message
-          : "Final AI analysis failed."
+          : "Final AI analysis failed.";
+
+      setAnalysisError(message);
+      setGenerationStep("");
+
+      return null;
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  /*
+   * Kept for compatibility with the existing
+   * generation flow.
+   */
+  const generateFinalAnalysis = async (
+    newImage: string
+  ) => {
+    const report =
+      await analyzeGeneratedRoom(
+        newImage
+      );
+
+    if (!report) {
+      throw new Error(
+        "Final AI analysis failed."
       );
     }
+
+    return report;
   };
 
   const generateDesign = async () => {
@@ -450,6 +496,7 @@ export default function DesignResultPage() {
     try {
       setGenerating(true);
       setError("");
+      setAnalysisError("");
       setFinalAnalysis(null);
 
       localStorage.removeItem(
@@ -517,13 +564,22 @@ export default function DesignResultPage() {
         "Your new interior has been generated."
       );
 
-      await generateFinalAnalysis(
-        newImage
-      );
+      /*
+       * Automatically attempt the final analysis.
+       *
+       * If this fails, the generated image remains
+       * available and the user gets a retry button.
+       */
+      const report =
+        await generateFinalAnalysis(
+          newImage
+        );
 
-      setGenerationStep(
-        "Design and final analysis completed."
-      );
+      if (report) {
+        setGenerationStep(
+          "Design and final analysis completed."
+        );
+      }
     } catch (error) {
       console.error(
         "DESIGN GENERATION ERROR:",
@@ -906,6 +962,29 @@ export default function DesignResultPage() {
                   </div>
                 </div>
               )}
+
+              {analyzing && !generating && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-md">
+                  <div className="text-center">
+                    <div className="mx-auto flex h-16 w-16 animate-pulse items-center justify-center rounded-2xl border border-purple-400/30 bg-purple-500/10 text-2xl">
+                      ◌
+                    </div>
+
+                    <p className="mt-5 text-lg font-semibold">
+                      Analyzing your redesigned room
+                    </p>
+
+                    <p className="mt-2 text-sm text-slate-400">
+                      AI is comparing the original
+                      and redesigned room...
+                    </p>
+
+                    <div className="mx-auto mt-6 h-1 w-48 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full w-1/2 animate-pulse rounded-full bg-purple-400" />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -913,15 +992,33 @@ export default function DesignResultPage() {
 
       {/* Error */}
 
-      {error && (
+      {(error || analysisError) && (
         <section className="relative z-10 mx-auto max-w-5xl px-6 pb-6 md:px-10">
-          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-4 text-center text-sm text-red-300">
-            {error}
+          <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-5 py-5 text-center">
+            <p className="text-sm text-red-300">
+              {analysisError || error}
+            </p>
+
+            {analysisError &&
+              generatedImage && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    analyzeGeneratedRoom()
+                  }
+                  disabled={analyzing || generating}
+                  className="mt-4 inline-flex items-center gap-3 rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {analyzing
+                    ? "Analyzing..."
+                    : "↻ Try Analysis Again"}
+                </button>
+              )}
           </div>
         </section>
       )}
 
-      {/* Generate controls */}
+      {/* Generate / Analyze controls */}
 
       <section className="relative z-10 mx-auto max-w-7xl px-6 pb-12 md:px-10">
         <div className="rounded-[28px] border border-white/10 bg-white/[0.025] p-8 text-center backdrop-blur-2xl md:p-10">
@@ -931,13 +1028,17 @@ export default function DesignResultPage() {
 
           <h2 className="mt-6 text-2xl font-semibold">
             {generatedImage
-              ? "Your AI design is ready"
+              ? finalAnalysis
+                ? "Your AI design is complete"
+                : "Your AI design is ready"
               : "Ready to create your design?"}
           </h2>
 
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-slate-500">
             {generatedImage
-              ? "You can generate another variation using the same room, budget and interior style."
+              ? finalAnalysis
+                ? "Your redesigned room and final AI analysis are ready."
+                : "The redesigned room is ready. Analyze it to generate your detailed AI report."
               : "ROOMAI will redesign your actual room while considering the selected room type, budget and interior style."}
           </p>
 
@@ -961,6 +1062,42 @@ export default function DesignResultPage() {
               </button>
             ) : (
               <>
+                {!finalAnalysis && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      analyzeGeneratedRoom()
+                    }
+                    disabled={
+                      analyzing ||
+                      generating
+                    }
+                    className="inline-flex items-center gap-3 rounded-full bg-purple-400 px-7 py-3.5 text-sm font-semibold text-black transition hover:scale-[1.02] hover:bg-purple-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {analyzing
+                      ? "Analyzing Room..."
+                      : "✦ Analyze This Room"}
+                  </button>
+                )}
+
+                {finalAnalysis && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      analyzeGeneratedRoom()
+                    }
+                    disabled={
+                      analyzing ||
+                      generating
+                    }
+                    className="inline-flex items-center gap-3 rounded-full border border-purple-400/20 bg-purple-500/10 px-7 py-3.5 text-sm font-medium text-purple-200 transition hover:bg-purple-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {analyzing
+                      ? "Analyzing..."
+                      : "↻ Re-analyze Room"}
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={generateDesign}
@@ -983,7 +1120,9 @@ export default function DesignResultPage() {
             <button
               type="button"
               onClick={handleStartAgain}
-              disabled={generating}
+              disabled={
+                generating || analyzing
+              }
               className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-transparent px-7 py-3.5 text-sm text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:opacity-50"
             >
               Start New Design
