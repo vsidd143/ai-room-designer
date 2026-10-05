@@ -3,6 +3,12 @@ import { InferenceClient } from "@huggingface/inference";
 
 const MODEL = "black-forest-labs/FLUX.2-dev";
 
+const MAX_RETRIES = 3;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -66,15 +72,75 @@ Add suitable furniture, lighting, wall colors, curtains, decor and storage.
 Keep the redesign realistic and achievable within the given budget.
 `;
 
-    // Use image-to-image because the selected provider
-    // currently exposes FLUX.2-dev through this task.
-    const generatedImage = await hf.imageToImage({
-      model: MODEL,
-      inputs: inputImage,
-      parameters: {
-        prompt,
-      },
-    });
+    let generatedImage: Blob | null = null;
+    let lastError: any = null;
+
+    // Retry temporary Hugging Face/provider failures.
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        console.log(
+          `REDESIGN: Generation attempt ${attempt}/${MAX_RETRIES}`
+        );
+
+        generatedImage = await hf.imageToImage({
+          model: MODEL,
+          inputs: inputImage,
+          parameters: {
+            prompt,
+          },
+        });
+
+        if (generatedImage) {
+          break;
+        }
+      } catch (error: any) {
+        lastError = error;
+
+        const errorMessage =
+          error?.message ||
+          error?.response?.data?.error ||
+          String(error);
+
+        console.error(
+          `REDESIGN: Attempt ${attempt} failed:`,
+          errorMessage
+        );
+
+        // If this was the final attempt, stop retrying.
+        if (attempt === MAX_RETRIES) {
+          break;
+        }
+
+        // Wait longer after each failed attempt.
+        // Attempt 1 -> 3 seconds
+        // Attempt 2 -> 6 seconds
+        const delay = attempt * 3000;
+
+        console.log(
+          `REDESIGN: Waiting ${delay / 1000}s before retry...`
+        );
+
+        await sleep(delay);
+      }
+    }
+
+    if (!generatedImage) {
+      const errorMessage =
+        lastError?.message ||
+        lastError?.response?.data?.error ||
+        "The AI image generation service is temporarily unavailable.";
+
+      return NextResponse.json(
+        {
+          error:
+            "AI image generation is temporarily unavailable. Please try again after a short while.",
+          details: errorMessage,
+          model: MODEL,
+          retried: MAX_RETRIES,
+        },
+        { status: 503 }
+      );
+    }
 
     const outputBuffer = Buffer.from(
       await generatedImage.arrayBuffer()
