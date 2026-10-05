@@ -5,16 +5,85 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+/*
+ * Gemini fallback chain.
+ *
+ * Order:
+ * 1. Gemini 3.8 Flash
+ * 2. Gemini 3.7 Flash
+ * 3. Gemini 3.6 Flash
+ * 4. Gemini 3.5 Flash
+ * 5. Gemini 3.5 Flash-Lite
+ * 6. Gemini 3.1 Flash-Lite
+ * 7. Gemini 3.1 Pro Preview
+ * 8. Gemini 2.5 Flash
+ *
+ * All selected models support multimodal/image understanding.
+ */
 const MODELS = [
   "gemini-3.8-flash",
   "gemini-3.7-flash",
   "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-3.1-pro-preview",
+  "gemini-2.5-flash",
 ];
 
-const MAX_RETRIES = 2;
+const MAX_RETRIES_PER_MODEL = 2;
 
 const sleep = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+function getErrorMessage(error: any): string {
+  return (
+    error?.message ||
+    error?.error?.message ||
+    error?.response?.data?.error?.message ||
+    String(error)
+  );
+}
+
+function isTemporaryError(message: string): boolean {
+  const normalized = message.toUpperCase();
+
+  return (
+    normalized.includes("503") ||
+    normalized.includes("UNAVAILABLE") ||
+    normalized.includes("HIGH DEMAND") ||
+    normalized.includes("429") ||
+    normalized.includes("RESOURCE_EXHAUSTED") ||
+    normalized.includes("500") ||
+    normalized.includes("INTERNAL") ||
+    normalized.includes("OVERLOADED") ||
+    normalized.includes("RATE LIMIT") ||
+    normalized.includes("TIMEOUT") ||
+    normalized.includes("DEADLINE")
+  );
+}
+
+function isModelUnavailableError(message: string): boolean {
+  const normalized = message.toUpperCase();
+
+  return (
+    normalized.includes("404") ||
+    normalized.includes("NOT_FOUND") ||
+    normalized.includes("NOT FOUND") ||
+    normalized.includes("MODEL_NOT_FOUND") ||
+    normalized.includes("UNSUPPORTED") ||
+    normalized.includes("INVALID MODEL") ||
+    normalized.includes("PERMISSION_DENIED")
+  );
+}
+
+function cleanJsonResponse(text: string): string {
+  return text
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
 
 export async function POST(req: Request) {
   try {
@@ -83,6 +152,14 @@ export async function POST(req: Request) {
         ) ||
       "Room";
 
+    const selectedBudget =
+      typeof budget === "object" && budget !== null
+        ? budget.amount ??
+          budget.value ??
+          budget.budget ??
+          100000
+        : budget || 100000;
+
     const prompt = `
 You are an expert interior designer and interior renovation cost planner.
 
@@ -110,7 +187,7 @@ Design Style:
 ${style || "Modern"}
 
 User Budget:
-₹${budget || "100000"}
+₹${selectedBudget}
 
 The original Gemini room analysis was:
 
@@ -395,15 +472,28 @@ Do not change the room dimensions.
     let response: any = null;
     let successfulModel = "";
 
+    /*
+     * Try every compatible Gemini model.
+     *
+     * If a model is temporarily unavailable:
+     * - Retry it once.
+     * - Then move to the next model.
+     *
+     * If a model is not available for the project:
+     * - Immediately move to the next model.
+     */
+
     for (const model of MODELS) {
+      response = null;
+
       for (
         let attempt = 1;
-        attempt <= MAX_RETRIES;
+        attempt <= MAX_RETRIES_PER_MODEL;
         attempt++
       ) {
         try {
           console.log(
-            `FINAL ANALYSIS: Trying ${model}, attempt ${attempt}/${MAX_RETRIES}`
+            `FINAL ANALYSIS: Trying ${model}, attempt ${attempt}/${MAX_RETRIES_PER_MODEL}`
           );
 
           console.log(
@@ -413,7 +503,7 @@ Do not change the room dimensions.
 
           console.log(
             "FINAL ANALYSIS BUDGET:",
-            budget || "100000"
+            selectedBudget
           );
 
           console.log(
@@ -447,46 +537,64 @@ Do not change the room dimensions.
             ],
           });
 
-          successfulModel = model;
+          if (response) {
+            successfulModel = model;
 
-          console.log(
-            `FINAL ANALYSIS SUCCESS with ${model}`
-          );
+            console.log(
+              `FINAL ANALYSIS SUCCESS with ${model}`
+            );
 
-          break;
+            break;
+          }
         } catch (error: any) {
           lastError = error;
 
-          const message =
-            error?.message ||
-            error?.error?.message ||
-            String(error);
+          const message = getErrorMessage(error);
 
           console.error(
             `FINAL ANALYSIS FAILED - ${model} attempt ${attempt}:`,
             message
           );
 
-          const isTemporaryError =
-            message.includes("503") ||
-            message.includes("UNAVAILABLE") ||
-            message.includes("high demand") ||
-            message.includes("429") ||
-            message.includes("RESOURCE_EXHAUSTED") ||
-            message.includes("500") ||
-            message.includes("INTERNAL");
+          /*
+           * If this model is unavailable/not supported,
+           * don't waste another retry on it.
+           */
+          if (isModelUnavailableError(message)) {
+            console.log(
+              `Model ${model} is unavailable. Moving to next model.`
+            );
 
-          if (!isTemporaryError) {
             break;
           }
 
-          if (attempt < MAX_RETRIES) {
-            console.log(
-              "Temporary Gemini error. Retrying..."
-            );
+          /*
+           * Temporary errors:
+           * retry this model once, then move to next model.
+           */
+          if (isTemporaryError(message)) {
+            if (attempt < MAX_RETRIES_PER_MODEL) {
+              const waitTime = 2500 * attempt;
 
-            await sleep(2000 * attempt);
+              console.log(
+                `Temporary Gemini error. Waiting ${waitTime}ms before retry...`
+              );
+
+              await sleep(waitTime);
+            }
+
+            continue;
           }
+
+          /*
+           * Unknown/non-temporary error.
+           * Try the next model instead of stopping the entire chain.
+           */
+          console.log(
+            `Non-temporary error on ${model}. Moving to next model.`
+          );
+
+          break;
         }
       }
 
@@ -495,16 +603,22 @@ Do not change the room dimensions.
       }
 
       console.log(
-        `Model ${model} failed. Trying next model...`
+        `Model ${model} did not complete final analysis. Trying next fallback model...`
       );
     }
 
     if (!response) {
+      console.error(
+        "ALL GEMINI FINAL ANALYSIS MODELS FAILED:",
+        lastError
+      );
+
       return NextResponse.json(
         {
           error:
-            lastError?.message ||
-            "All Gemini models are currently unavailable. Please try again.",
+            "All Gemini analysis models are temporarily unavailable. Please try again in a moment.",
+          details: getErrorMessage(lastError),
+          attemptedModels: MODELS,
         },
         { status: 503 }
       );
@@ -518,16 +632,13 @@ Do not change the room dimensions.
         {
           error:
             "Gemini returned an empty final analysis.",
+          model: successfulModel,
         },
         { status: 500 }
       );
     }
 
-    const cleaned = text
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
+    const cleaned = cleanJsonResponse(text);
 
     let finalAnalysis;
 
@@ -540,6 +651,11 @@ Do not change the room dimensions.
       );
 
       console.error(
+        "SUCCESSFUL MODEL:",
+        successfulModel
+      );
+
+      console.error(
         "GEMINI RAW RESPONSE:",
         text
       );
@@ -548,6 +664,7 @@ Do not change the room dimensions.
         {
           error:
             "Gemini returned an invalid analysis format. Please try again.",
+          model: successfulModel,
         },
         { status: 500 }
       );
@@ -555,12 +672,17 @@ Do not change the room dimensions.
 
     return NextResponse.json({
       success: true,
+
+      /*
+       * This tells us which fallback model actually succeeded.
+       * Very useful during your project presentation/debugging.
+       */
       model: successfulModel,
 
       // Frontend expects data.report
       report: finalAnalysis,
 
-      // Keep data as well for backward compatibility
+      // Backward compatibility
       data: finalAnalysis,
 
       roomType,
