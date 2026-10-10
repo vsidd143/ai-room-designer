@@ -33,37 +33,23 @@ export default function UploadPage() {
   const supabase = createClient();
 
   const [userId, setUserId] = useState("");
-
   const [selectedRoom, setSelectedRoom] = useState("");
   const [selectedBudget, setSelectedBudget] = useState("");
   const [selectedStyle, setSelectedStyle] = useState("");
-
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
-
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-
   const [message, setMessage] = useState("");
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
-
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     setLoaded(true);
 
-    const savedRoom =
-      localStorage.getItem("smartroom_room_type") || "";
-
-    const savedBudget =
-      localStorage.getItem("smartroom_budget") || "";
-
-    const savedStyle =
-      localStorage.getItem("smartroom_design_style") || "";
-
-    setSelectedRoom(savedRoom);
-    setSelectedBudget(savedBudget);
-    setSelectedStyle(savedStyle);
+    setSelectedRoom(localStorage.getItem("smartroom_room_type") || "");
+    setSelectedBudget(localStorage.getItem("smartroom_budget") || "");
+    setSelectedStyle(localStorage.getItem("smartroom_design_style") || "");
 
     const loadUser = async () => {
       const {
@@ -81,118 +67,88 @@ export default function UploadPage() {
     loadUser();
   }, [router, supabase]);
 
-  const handleFileChange = (
-    event: ChangeEvent<HTMLInputElement>
-  ) => {
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
 
-    if (!file) {
-      return;
-    }
+    if (!file) return;
 
     setMessage("");
-    setAnalysis(null);
 
-    const allowedTypes = [
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-    ];
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
 
     if (!allowedTypes.includes(file.type)) {
-      setMessage(
-        "Please select a JPG, PNG, or WebP image."
-      );
+      setMessage("Please select a JPG, PNG, or WebP image.");
+      event.target.value = "";
       return;
     }
 
     if (file.size > 10 * 1024 * 1024) {
-      setMessage(
-        "Image size must be less than 10MB."
-      );
+      setMessage("Image size must be less than 10MB.");
+      event.target.value = "";
       return;
     }
 
+    setAnalysis(null);
     setSelectedFile(file);
 
-    const imageUrl = URL.createObjectURL(file);
-    setPreview(imageUrl);
+    setPreview((previousPreview) => {
+      if (previousPreview.startsWith("blob:")) {
+        URL.revokeObjectURL(previousPreview);
+      }
 
-    localStorage.removeItem(
-      "smartroom_generated_image"
-    );
+      return URL.createObjectURL(file);
+    });
 
-    localStorage.removeItem(
-      "smartroom_final_analysis"
-    );
+    localStorage.removeItem("smartroom_generated_image");
+    localStorage.removeItem("smartroom_final_analysis");
   };
 
   const removeImage = () => {
     setSelectedFile(null);
+
+    if (preview.startsWith("blob:")) {
+      URL.revokeObjectURL(preview);
+    }
+
     setPreview("");
     setAnalysis(null);
     setMessage("");
 
-    localStorage.removeItem(
-      "smartroom_room_image"
-    );
-
-    localStorage.removeItem(
-      "smartroom_room_mime"
-    );
-
-    localStorage.removeItem(
-      "smartroom_room_analysis"
-    );
-
-    localStorage.removeItem(
-      "smartroom_generated_image"
-    );
-
-    localStorage.removeItem(
-      "smartroom_final_analysis"
-    );
+    localStorage.removeItem("smartroom_room_image");
+    localStorage.removeItem("smartroom_room_mime");
+    localStorage.removeItem("smartroom_room_analysis");
+    localStorage.removeItem("smartroom_uploaded_path");
+    localStorage.removeItem("smartroom_generated_image");
+    localStorage.removeItem("smartroom_final_analysis");
   };
 
-  const convertToBase64 = (
-    file: File
-  ): Promise<string> => {
+  const convertToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
 
       reader.onload = () => {
         const result = reader.result as string;
-
-        const base64 = result.split(",")[1];
-
-        resolve(base64);
+        resolve(result.split(",")[1]);
       };
 
       reader.onerror = reject;
-
       reader.readAsDataURL(file);
     });
   };
 
   const validateConfiguration = () => {
     if (!selectedRoom) {
-      setMessage(
-        "Room type is missing. Please go back to Room Planner."
-      );
+      setMessage("Room type is missing. Please go back to Room Planner.");
       return false;
     }
 
     if (!selectedBudget) {
-      setMessage(
-        "Budget is missing. Please go back to Budget."
-      );
+      setMessage("Budget is missing. Please go back to Budget.");
       return false;
     }
 
     if (!selectedStyle) {
-      setMessage(
-        "Design style is missing. Please go back to Design Style."
-      );
+      setMessage("Design style is missing. Please go back to Design Style.");
       return false;
     }
 
@@ -201,100 +157,61 @@ export default function UploadPage() {
 
   const analyzeRoom = async (): Promise<Analysis | null> => {
     if (!selectedFile) {
-      setMessage(
-        "Please upload a room image first."
-      );
+      setMessage("Please upload a room image first.");
       return null;
     }
 
-    if (!validateConfiguration()) {
-      return null;
-    }
+    if (!validateConfiguration()) return null;
 
     try {
       setAnalyzing(true);
       setMessage("");
 
-      const base64Image =
-        await convertToBase64(selectedFile);
+      const base64Image = await convertToBase64(selectedFile);
 
-      const response = await fetch(
-        "/api/analyze-room",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            image: base64Image,
-            mimeType: selectedFile.type,
-            roomType: selectedRoom,
-            budget: selectedBudget,
-            style: selectedStyle,
-          }),
-        }
-      );
+      const response = await fetch("/api/analyze-room", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          image: base64Image,
+          mimeType: selectedFile.type,
+          roomType: selectedRoom,
+          budget: selectedBudget,
+          style: selectedStyle,
+        }),
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            "Room analysis failed."
-        );
+        throw new Error(data?.error || "Room analysis failed.");
       }
 
       if (!data.analysis) {
-        throw new Error(
-          "AI analysis was not returned."
-        );
+        throw new Error("AI analysis was not returned.");
       }
 
-      const roomAnalysis =
-        data.analysis as Analysis;
+      const roomAnalysis = data.analysis as Analysis;
 
       setAnalysis(roomAnalysis);
 
-      localStorage.setItem(
-        "smartroom_room_image",
-        base64Image
-      );
-
-      localStorage.setItem(
-        "smartroom_room_mime",
-        selectedFile.type
-      );
-
+      localStorage.setItem("smartroom_room_image", base64Image);
+      localStorage.setItem("smartroom_room_mime", selectedFile.type);
       localStorage.setItem(
         "smartroom_room_analysis",
         JSON.stringify(roomAnalysis)
       );
+      localStorage.setItem("smartroom_room_type", selectedRoom);
+      localStorage.setItem("smartroom_budget", selectedBudget);
+      localStorage.setItem("smartroom_design_style", selectedStyle);
 
-      localStorage.setItem(
-        "smartroom_room_type",
-        selectedRoom
-      );
-
-      localStorage.setItem(
-        "smartroom_budget",
-        selectedBudget
-      );
-
-      localStorage.setItem(
-        "smartroom_design_style",
-        selectedStyle
-      );
-
-      setMessage(
-        "AI analysis completed successfully."
-      );
+      setMessage("AI analysis completed successfully.");
 
       return roomAnalysis;
     } catch (error) {
-      console.error(
-        "ANALYSIS ERROR:",
-        error
-      );
+      console.error("ANALYSIS ERROR:", error);
 
       setMessage(
         error instanceof Error
@@ -310,9 +227,7 @@ export default function UploadPage() {
 
   const uploadRoomImage = async () => {
     if (!selectedFile || !userId) {
-      setMessage(
-        "Please upload an image first."
-      );
+      setMessage("Please upload an image first.");
       return false;
     }
 
@@ -320,47 +235,27 @@ export default function UploadPage() {
       setUploading(true);
 
       const extension =
-        selectedFile.name
-          .split(".")
-          .pop()
-          ?.toLowerCase() || "jpg";
+        selectedFile.name.split(".").pop()?.toLowerCase() || "jpg";
 
       const filePath = `${userId}/${crypto.randomUUID()}.${extension}`;
 
-      const {
-        error: uploadError,
-      } = await supabase.storage
+      const { error: uploadError } = await supabase.storage
         .from("room-images")
-        .upload(
-          filePath,
-          selectedFile,
-          {
-            contentType:
-              selectedFile.type,
-            upsert: false,
-          }
-        );
+        .upload(filePath, selectedFile, {
+          contentType: selectedFile.type,
+          upsert: false,
+        });
 
-      if (uploadError) {
-        throw uploadError;
-      }
+      if (uploadError) throw uploadError;
 
-      localStorage.setItem(
-        "smartroom_uploaded_path",
-        filePath
-      );
+      localStorage.setItem("smartroom_uploaded_path", filePath);
 
       return true;
     } catch (error) {
-      console.error(
-        "UPLOAD ERROR:",
-        error
-      );
+      console.error("UPLOAD ERROR:", error);
 
       setMessage(
-        error instanceof Error
-          ? error.message
-          : "Image upload failed."
+        error instanceof Error ? error.message : "Image upload failed."
       );
 
       return false;
@@ -369,109 +264,59 @@ export default function UploadPage() {
     }
   };
 
-  const handleContinueToDesignResult =
-    async () => {
-      if (!selectedFile) {
-        setMessage(
-          "Please upload a room image first."
-        );
-        return;
+  const handleContinueToDesignResult = async () => {
+    if (!selectedFile) {
+      setMessage("Please upload a room image first.");
+      return;
+    }
+
+    if (!validateConfiguration()) return;
+
+    try {
+      setMessage("");
+
+      let currentAnalysis = analysis;
+
+      if (!currentAnalysis) {
+        currentAnalysis = await analyzeRoom();
+
+        if (!currentAnalysis) return;
       }
 
-      if (!validateConfiguration()) {
-        return;
-      }
+      const uploadSuccess = await uploadRoomImage();
 
-      try {
-        setMessage("");
+      if (!uploadSuccess) return;
 
-        /*
-         * STEP 1
-         * Analyze the room if it has not already
-         * been analyzed.
-         */
-        let currentAnalysis = analysis;
+      localStorage.setItem("smartroom_room_type", selectedRoom);
+      localStorage.setItem("smartroom_budget", selectedBudget);
+      localStorage.setItem("smartroom_design_style", selectedStyle);
+      localStorage.setItem(
+        "smartroom_room_analysis",
+        JSON.stringify(currentAnalysis)
+      );
 
-        if (!currentAnalysis) {
-          currentAnalysis =
-            await analyzeRoom();
+      router.push("/design-result");
+    } catch (error) {
+      console.error("CONTINUE ERROR:", error);
 
-          if (!currentAnalysis) {
-            return;
-          }
-        }
-
-        /*
-         * STEP 2
-         * Upload original image to Supabase.
-         */
-        const uploadSuccess =
-          await uploadRoomImage();
-
-        if (!uploadSuccess) {
-          return;
-        }
-
-        /*
-         * STEP 3
-         * Make sure all required information
-         * is available to the result page.
-         */
-        localStorage.setItem(
-          "smartroom_room_type",
-          selectedRoom
-        );
-
-        localStorage.setItem(
-          "smartroom_budget",
-          selectedBudget
-        );
-
-        localStorage.setItem(
-          "smartroom_design_style",
-          selectedStyle
-        );
-
-        localStorage.setItem(
-          "smartroom_room_analysis",
-          JSON.stringify(currentAnalysis)
-        );
-
-        /*
-         * STEP 4
-         * Go to the ACTUAL result page.
-         *
-         * IMPORTANT:
-         * This is /design-result,
-         * NOT /redesign.
-         */
-        router.push("/design-result");
-      } catch (error) {
-        console.error(
-          "CONTINUE ERROR:",
-          error
-        );
-
-        setMessage(
-          error instanceof Error
-            ? error.message
-            : "Unable to continue to the design result."
-        );
-      }
-    };
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to continue to the design result."
+      );
+    }
+  };
 
   return (
     <main
       className={`min-h-screen overflow-hidden bg-[#08080c] text-white transition-opacity duration-700 ${
-        loaded
-          ? "opacity-100"
-          : "opacity-0"
+        loaded ? "opacity-100" : "opacity-0"
       }`}
     >
       {/* Background */}
 
       <div className="pointer-events-none fixed inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_10%,rgba(139,92,246,0.16),transparent_32%),radial-gradient(circle_at_10%_70%,rgba(59,130,246,0.07),transparent_25%),radial-gradient(circle_at_90%_70%,rgba(168,85,247,0.07),transparent_25%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_10%,rgba(34,211,238,0.13),transparent_32%),radial-gradient(circle_at_10%_70%,rgba(59,130,246,0.10),transparent_25%),radial-gradient(circle_at_90%_70%,rgba(139,92,246,0.10),transparent_25%)]" />
 
         <div className="absolute inset-0 bg-[linear-gradient(120deg,#08080c_0%,#101018_45%,#08080c_100%)]" />
 
@@ -480,8 +325,7 @@ export default function UploadPage() {
           style={{
             backgroundImage:
               "linear-gradient(rgba(255,255,255,0.5) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.5) 1px, transparent 1px)",
-            backgroundSize:
-              "80px 80px",
+            backgroundSize: "80px 80px",
           }}
         />
       </div>
@@ -489,22 +333,16 @@ export default function UploadPage() {
       {/* Navbar */}
 
       <nav className="relative z-20 mx-auto flex max-w-7xl items-center justify-between px-6 py-7 md:px-10">
-        <Link
-          href="/dashboard"
-          className="group flex items-center gap-3"
-        >
-          <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-[0_0_30px_rgba(139,92,246,0.12)] transition duration-500 group-hover:scale-105">
-            <div className="absolute inset-0 bg-gradient-to-br from-purple-500/20 to-transparent" />
-
-            <span className="relative text-lg font-black">
-              R
-            </span>
+        <Link href="/dashboard" className="group flex items-center gap-3">
+          <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-[0_0_30px_rgba(34,211,238,0.12)] transition duration-500 group-hover:scale-105">
+            <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/20 to-transparent" />
+            <span className="relative text-lg font-black">R</span>
           </div>
 
           <div className="leading-none">
             <div className="text-[15px] font-bold tracking-[0.28em]">
               ROOM
-              <span className="text-purple-400">
+              <span className="bg-gradient-to-r from-cyan-300 via-blue-400 to-violet-400 bg-clip-text text-transparent">
                 AI
               </span>
             </div>
@@ -525,7 +363,7 @@ export default function UploadPage() {
 
           <Link
             href="/planner"
-            className="rounded-full bg-purple-500/15 px-5 py-2.5 text-xs font-medium text-purple-200"
+            className="rounded-full border border-cyan-400/15 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-violet-500/10 px-5 py-2.5 text-xs font-medium text-cyan-200"
           >
             New Design
           </Link>
@@ -540,7 +378,7 @@ export default function UploadPage() {
 
         <Link
           href="/dashboard"
-          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs text-slate-400 transition hover:border-purple-400/30 hover:text-white"
+          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs text-slate-400 transition hover:border-cyan-400/30 hover:text-white"
         >
           Dashboard
         </Link>
@@ -550,35 +388,13 @@ export default function UploadPage() {
 
       <div className="relative z-10 mx-auto max-w-4xl px-6 pt-4">
         <div className="flex items-center justify-between">
-          <Step
-            number="01"
-            label="Room"
-            completed
-          />
-
+          <Step number="01" label="Room" completed />
           <Line completed />
-
-          <Step
-            number="02"
-            label="Budget"
-            completed
-          />
-
+          <Step number="02" label="Budget" completed />
           <Line completed />
-
-          <Step
-            number="03"
-            label="Style"
-            completed
-          />
-
+          <Step number="03" label="Style" completed />
           <Line active />
-
-          <Step
-            number="04"
-            label="Upload"
-            active
-          />
+          <Step number="04" label="Upload" active />
         </div>
       </div>
 
@@ -586,13 +402,13 @@ export default function UploadPage() {
 
       <section className="relative z-10 mx-auto max-w-5xl px-6 pb-24 pt-14">
         <div className="text-center">
-          <p className="text-[10px] font-semibold tracking-[0.35em] text-purple-300/80">
+          <p className="text-[10px] font-semibold tracking-[0.35em] text-cyan-300/80">
             STEP 04 · ROOM IMAGE
           </p>
 
           <h1 className="mt-5 text-5xl font-light tracking-[-0.04em] sm:text-6xl md:text-7xl">
             Upload your{" "}
-            <span className="font-serif italic text-purple-200">
+            <span className="bg-gradient-to-r from-cyan-200 via-blue-300 to-violet-300 bg-clip-text font-serif italic text-transparent">
               space.
             </span>
           </h1>
@@ -607,49 +423,27 @@ export default function UploadPage() {
         {/* Selected configuration */}
 
         <div className="mx-auto mt-10 grid max-w-3xl gap-3 sm:grid-cols-3">
-          <InfoCard
-            label="ROOM"
-            value={
-              selectedRoom ||
-              "Not selected"
-            }
-          />
-
-          <InfoCard
-            label="BUDGET"
-            value={
-              selectedBudget ||
-              "Not selected"
-            }
-          />
-
-          <InfoCard
-            label="STYLE"
-            value={
-              selectedStyle ||
-              "Not selected"
-            }
-          />
+          <InfoCard label="ROOM" value={selectedRoom || "Not selected"} />
+          <InfoCard label="BUDGET" value={selectedBudget || "Not selected"} />
+          <InfoCard label="STYLE" value={selectedStyle || "Not selected"} />
         </div>
 
         {/* Upload area */}
 
         <div className="mx-auto mt-10 max-w-3xl">
           {!preview ? (
-            <label className="group relative flex min-h-[390px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[32px] border border-dashed border-white/15 bg-[#111117]/80 p-8 backdrop-blur-2xl transition duration-500 hover:border-purple-400/40 hover:bg-[#15151d]">
+            <label className="group relative flex min-h-[390px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[32px] border border-dashed border-white/15 bg-[#111117]/80 p-8 backdrop-blur-2xl transition duration-500 hover:border-cyan-400/40 hover:bg-[#15151d]">
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                onChange={
-                  handleFileChange
-                }
+                onChange={handleFileChange}
                 className="hidden"
               />
 
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(139,92,246,0.08),transparent_45%)] opacity-0 transition duration-500 group-hover:opacity-100" />
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(34,211,238,0.08),transparent_45%)] opacity-0 transition duration-500 group-hover:opacity-100" />
 
-              <div className="relative flex h-24 w-24 items-center justify-center rounded-3xl border border-purple-400/20 bg-purple-500/10 shadow-[0_0_60px_rgba(139,92,246,0.12)] transition duration-500 group-hover:scale-105 group-hover:border-purple-400/40">
-                <span className="text-4xl">
+              <div className="relative flex h-24 w-24 items-center justify-center rounded-3xl border border-cyan-400/20 bg-gradient-to-br from-cyan-500/10 via-blue-500/10 to-violet-500/10 shadow-[0_0_60px_rgba(34,211,238,0.12)] transition duration-500 group-hover:scale-105 group-hover:border-cyan-400/40">
+                <span className="bg-gradient-to-br from-cyan-200 via-blue-300 to-violet-300 bg-clip-text text-4xl text-transparent">
                   ↑
                 </span>
               </div>
@@ -683,10 +477,8 @@ export default function UploadPage() {
 
                 <button
                   type="button"
-                  onClick={
-                    removeImage
-                  }
-                  className="absolute right-4 top-4 rounded-full border border-white/10 bg-black/60 px-4 py-2 text-xs text-white backdrop-blur-xl transition hover:bg-black/80"
+                  onClick={removeImage}
+                  className="absolute right-4 top-4 rounded-full border border-white/10 bg-black/60 px-4 py-2 text-xs text-white backdrop-blur-xl transition hover:border-rose-400/40 hover:bg-black/80"
                 >
                   Remove
                 </button>
@@ -700,24 +492,18 @@ export default function UploadPage() {
 
                   <p className="mt-1 text-xs text-slate-500">
                     {selectedFile
-                      ? `${(
-                          selectedFile.size /
-                          1024 /
-                          1024
-                        ).toFixed(2)} MB`
+                      ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB`
                       : ""}
                   </p>
                 </div>
 
-                <label className="cursor-pointer rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-xs text-slate-300 transition hover:bg-white/[0.08] hover:text-white">
+                <label className="cursor-pointer rounded-full border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-violet-500/10 px-5 py-2.5 text-xs text-cyan-100 transition hover:border-cyan-400/40 hover:bg-white/[0.08] hover:text-white">
                   Change Image
 
                   <input
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
-                    onChange={
-                      handleFileChange
-                    }
+                    onChange={handleFileChange}
                     className="hidden"
                   />
                 </label>
@@ -729,7 +515,7 @@ export default function UploadPage() {
         {/* Message */}
 
         {message && (
-          <div className="mx-auto mt-6 max-w-3xl rounded-2xl border border-purple-400/20 bg-purple-500/10 px-5 py-4 text-center text-sm text-purple-200">
+          <div className="mx-auto mt-6 max-w-3xl rounded-2xl border border-cyan-400/20 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-violet-500/10 px-5 py-4 text-center text-sm text-cyan-100">
             {message}
           </div>
         )}
@@ -739,17 +525,11 @@ export default function UploadPage() {
         <div className="mt-10 flex justify-center">
           <button
             type="button"
-            onClick={
-              handleContinueToDesignResult
-            }
-            disabled={
-              analyzing ||
-              uploading ||
-              !selectedFile
-            }
-            className="group relative inline-flex items-center gap-4 overflow-hidden rounded-full bg-white px-8 py-4 text-sm font-semibold text-black shadow-[0_0_40px_rgba(255,255,255,0.08)] transition duration-500 hover:scale-[1.02] hover:shadow-[0_0_50px_rgba(255,255,255,0.15)] disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={handleContinueToDesignResult}
+            disabled={analyzing || uploading || !selectedFile}
+            className="group relative inline-flex items-center gap-4 overflow-hidden rounded-full bg-gradient-to-r from-cyan-300 via-blue-400 to-violet-400 px-8 py-4 text-sm font-semibold text-[#08080c] shadow-[0_0_40px_rgba(34,211,238,0.15)] transition duration-500 hover:scale-[1.02] hover:shadow-[0_0_50px_rgba(59,130,246,0.25)] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-black/5 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+            <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
 
             <span className="relative">
               {analyzing
@@ -776,9 +556,7 @@ export default function UploadPage() {
           </span>
 
           <span>ROOM ANALYSIS</span>
-
           <span>PERSONALIZED REDESIGN</span>
-
           <span>BUDGET AWARE</span>
         </div>
       </section>
@@ -815,21 +593,19 @@ function Step({
       <div
         className={`flex h-9 w-9 items-center justify-center rounded-full border text-[10px] font-semibold transition ${
           active
-            ? "border-purple-400/50 bg-purple-500/15 text-purple-200 shadow-[0_0_25px_rgba(139,92,246,0.15)]"
+            ? "border-cyan-400/50 bg-gradient-to-br from-cyan-500/15 via-blue-500/15 to-violet-500/15 text-cyan-100 shadow-[0_0_25px_rgba(34,211,238,0.15)]"
             : completed
             ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
             : "border-white/10 bg-white/[0.03] text-slate-600"
         }`}
       >
-        {completed && !active
-          ? "✓"
-          : number}
+        {completed && !active ? "✓" : number}
       </div>
 
       <span
         className={`text-[9px] tracking-[0.2em] ${
           active
-            ? "text-purple-300"
+            ? "text-cyan-200"
             : completed
             ? "text-slate-400"
             : "text-slate-600"
@@ -854,7 +630,7 @@ function Line({
         completed
           ? "bg-emerald-400/20"
           : active
-          ? "bg-purple-400/30"
+          ? "bg-gradient-to-r from-cyan-400/40 via-blue-400/40 to-violet-400/40"
           : "bg-white/10"
       }`}
     />
